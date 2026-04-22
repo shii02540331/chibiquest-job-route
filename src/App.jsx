@@ -78,6 +78,42 @@ function loadMasteredJobs() {
   }
 }
 
+/* ========= 連鎖チェック用 ========= */
+
+function collectAllRequirements(jobName, jobsData, result = new Set()) {
+  if (isUnknownJobName(jobName)) return result
+  if (!jobsData[jobName]) return result
+  if (result.has(jobName)) return result
+
+  result.add(jobName)
+
+  const reqs = getSafeRequires(jobsData[jobName])
+
+  reqs.forEach((next) => {
+    collectAllRequirements(next, jobsData, result)
+  })
+
+  return result
+}
+
+function addWithRequirements(jobName, current) {
+  const next = new Set(current)
+  const chain = collectAllRequirements(jobName, jobs)
+
+  chain.forEach((name) => next.add(name))
+  return [...next]
+}
+
+function removeWithRequirements(jobName, current) {
+  const next = new Set(current)
+  const chain = collectAllRequirements(jobName, jobs)
+
+  chain.forEach((name) => next.delete(name))
+  return [...next]
+}
+
+/* ========= ノード ========= */
+
 function JobNode({ data }) {
   const opacity = data.dimmed ? 0.28 : 1
   const borderColor = data.highlighted ? '#0f172a' : '#334155'
@@ -108,6 +144,8 @@ const nodeTypes = {
   jobNode: JobNode,
 }
 
+/* ========= グラフ生成 ========= */
+
 function buildUniqueGraph(target, jobsData) {
   const nodeNames = new Set()
   const edges = []
@@ -121,8 +159,7 @@ function buildUniqueGraph(target, jobsData) {
 
     nodeNames.add(jobName)
 
-    const job = jobsData[jobName]
-    const reqs = getSafeRequires(job)
+    const reqs = getSafeRequires(jobsData[jobName])
 
     reqs.forEach((requiredJob) => {
       if (isUnknownJobName(requiredJob)) return
@@ -160,6 +197,7 @@ function makeLayout(nodeNames, jobsData, direction = 'horizontal') {
     if (!job) return
 
     const key = job.itemJob ? 'item' : String(job.tier)
+
     if (!groups[key]) groups[key] = []
     groups[key].push(jobName)
   })
@@ -180,7 +218,6 @@ function makeLayout(nodeNames, jobsData, direction = 'horizontal') {
 
     arr.forEach((jobName, index) => {
       const job = jobsData[jobName]
-      if (!job) return
 
       const position =
         direction === 'horizontal'
@@ -195,7 +232,7 @@ function makeLayout(nodeNames, jobsData, direction = 'horizontal') {
           label: jobName,
           subLabel: getTierLabel(job),
           itemJob: job.itemJob,
-          backgroundColor: tierColors[job.tier] || '#ffffff',
+          backgroundColor: tierColors[job.tier] || '#fff',
           sourcePosition:
             direction === 'horizontal' ? Position.Left : Position.Top,
           targetPosition:
@@ -221,12 +258,10 @@ function collectRequired(target, jobsData) {
 
     result.add(jobName)
 
-    const job = jobsData[jobName]
-    getSafeRequires(job).forEach(dfs)
+    getSafeRequires(jobsData[jobName]).forEach(dfs)
   }
 
   dfs(target)
-
   return [...result]
 }
 
@@ -249,10 +284,7 @@ function collectHighlightSet(selectedJob, targetJob, jobsData) {
 
     nodeSet.add(jobName)
 
-    const job = jobsData[jobName]
-    const reqs = getSafeRequires(job)
-
-    reqs.forEach((requiredJob) => {
+    getSafeRequires(jobsData[jobName]).forEach((requiredJob) => {
       if (!jobsData[requiredJob]) return
       if (shouldHideLowTier(requiredJob, targetJob, jobsData)) return
 
@@ -266,16 +298,15 @@ function collectHighlightSet(selectedJob, targetJob, jobsData) {
   return { nodeSet, edgeSet }
 }
 
+/* ========= APP ========= */
+
 export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1000)
   const [masteredJobs, setMasteredJobs] = useState(() => loadMasteredJobs())
   const [reincarnationCount, setReincarnationCount] = useState(0)
 
   useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth <= 1000)
-    }
-
+    const handleResize = () => setIsMobile(window.innerWidth <= 1000)
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
@@ -354,7 +385,6 @@ export default function App() {
 
     const edges = uniqueGraph.edges.map((edge) => ({
       ...edge,
-      animated: false,
       style: hasSelection
         ? edgeSet.has(edge.id)
           ? { stroke: '#0f172a', strokeWidth: 3, opacity: 1 }
@@ -365,24 +395,34 @@ export default function App() {
     const requiredJobs = collectRequired(target, jobs)
       .map((jobName) => {
         const job = jobs[jobName]
+
         return {
           name: jobName,
           job,
           isMastered: masteredSet.has(jobName),
-          adjustedNeedLv: getAdjustedNeedLv(job?.needLv, reincarnationCount),
+          adjustedNeedLv: getAdjustedNeedLv(
+            job?.needLv,
+            reincarnationCount
+          ),
         }
       })
       .sort((a, b) => {
+        /* 未達成を上 */
         if (a.isMastered !== b.isMastered) {
           return a.isMastered ? 1 : -1
         }
 
-        const aLv = a.adjustedNeedLv ?? -1
-        const bLv = b.adjustedNeedLv ?? -1
+        /* tier高い順 */
+        const tierA = a.job?.tier ?? 0
+        const tierB = b.job?.tier ?? 0
 
-        if (aLv !== bLv) {
-          return bLv - aLv
-        }
+        if (tierA !== tierB) return tierB - tierA
+
+        /* 必要LV高い順 */
+        const lvA = a.adjustedNeedLv ?? -1
+        const lvB = b.adjustedNeedLv ?? -1
+
+        if (lvA !== lvB) return lvB - lvA
 
         return a.name.localeCompare(b.name, 'ja')
       })
@@ -392,7 +432,13 @@ export default function App() {
       edges,
       requiredJobs,
     }
-  }, [target, direction, selectedJob, masteredSet, reincarnationCount])
+  }, [
+    target,
+    direction,
+    selectedJob,
+    masteredSet,
+    reincarnationCount,
+  ])
 
   const handleShow = useCallback(() => {
     if (!input || !jobs[input]) return
@@ -402,19 +448,20 @@ export default function App() {
     setFlowKey((prev) => prev + 1)
   }, [input])
 
+  /* 連鎖チェック版 */
   const handleToggleMastered = useCallback((jobName) => {
     setMasteredJobs((prev) => {
-      if (prev.includes(jobName)) {
-        return prev.filter((name) => name !== jobName)
+      const already = prev.includes(jobName)
+
+      if (already) {
+        return removeWithRequirements(jobName, prev)
       }
-      return [...prev, jobName]
+
+      return addWithRequirements(jobName, prev)
     })
   }, [])
 
   const selectedDetail = selectedJob ? jobs[selectedJob] : null
-  const selectedAdjustedNeedLv = selectedDetail
-    ? getAdjustedNeedLv(selectedDetail.needLv, reincarnationCount)
-    : null
 
   return (
     <div className="app">
@@ -471,14 +518,15 @@ export default function App() {
 
           <div className="selector-group">
             <label className="toolbar-label">転生数</label>
+
             <input
               type="number"
               min="0"
               value={reincarnationCount}
               onChange={(e) => {
-                const value = Number(e.target.value)
+                const v = Number(e.target.value)
                 setReincarnationCount(
-                  Number.isNaN(value) || value < 0 ? 0 : Math.floor(value)
+                  Number.isNaN(v) || v < 0 ? 0 : Math.floor(v)
                 )
               }}
               style={{
@@ -487,7 +535,6 @@ export default function App() {
                 fontSize: '14px',
                 border: '1px solid #cbd5e1',
                 borderRadius: '8px',
-                background: '#ffffff',
               }}
             />
           </div>
@@ -513,7 +560,9 @@ export default function App() {
               縦向き
             </button>
 
-            <button onClick={() => setFlowKey((prev) => prev + 1)}>
+            <button
+              onClick={() => setFlowKey((prev) => prev + 1)}
+            >
               リセット
             </button>
           </div>
@@ -525,19 +574,6 @@ export default function App() {
           <div className="panel-header">
             <div className="panel-title">
               {target} に必要な職業ツリー
-            </div>
-
-            <div className="legend">
-              <span className="legend-item">
-                <span className="legend-color tier1" />1次職
-              </span>
-              <span className="legend-item">
-                <span className="legend-color tier2" />2次職
-              </span>
-              <span className="legend-item">
-                <span className="legend-color tier3" />3次職
-              </span>
-              <span className="legend-item">📦 アイテム職</span>
             </div>
           </div>
 
@@ -556,9 +592,7 @@ export default function App() {
               zoomOnPinch
               zoomOnDoubleClick={false}
               onlyRenderVisibleElements
-              onNodeClick={(_, node) => {
-                setSelectedJob(node.id)
-              }}
+              onNodeClick={(_, node) => setSelectedJob(node.id)}
             >
               {!isMobile && <Background />}
               <Controls />
@@ -567,89 +601,14 @@ export default function App() {
         </section>
 
         <aside className="side-panel">
-          <div className="detail-box">
-            {!selectedDetail ? (
-              <>
-                <h2>職業詳細</h2>
-                <p>ノードをクリックしてください</p>
-              </>
-            ) : (
-              <>
-                <h2>{selectedJob}</h2>
-                <p>{getTierLabel(selectedDetail)}</p>
-
-                {selectedDetail.needLv != null && (
-                  <>
-                    <h3>必要LV</h3>
-                    <p>
-                      {selectedAdjustedNeedLv}
-                      {selectedAdjustedNeedLv !== selectedDetail.needLv && (
-                        <span style={{ color: '#64748b', marginLeft: 8 }}>
-                          (元 {selectedDetail.needLv})
-                        </span>
-                      )}
-                    </p>
-                  </>
-                )}
-
-                {selectedDetail.itemJob && (
-                  <>
-                    <h3>必要アイテム</h3>
-                    <p className="item-job-text">
-                      {selectedDetail.changeItem}
-                    </p>
-                  </>
-                )}
-
-                <h3>前提職業</h3>
-
-                {getSafeRequires(selectedDetail).length === 0 ? (
-                  <p>なし</p>
-                ) : (
-                  <ul>
-                    {getSafeRequires(selectedDetail).map((jobName) => (
-                      <li key={jobName}>{jobName}</li>
-                    ))}
-                  </ul>
-                )}
-
-                <h3>マスターLV</h3>
-                <p>{selectedDetail.masterLv ?? '未設定'}</p>
-
-                <h3>覚える技（覚える職業LV）</h3>
-                {selectedDetail.skills.length === 0 ? (
-                  <p>なし</p>
-                ) : (
-                  <ul>
-                    {selectedDetail.skills.map((skill, idx) => (
-                      <li key={`${skill.name}-${skill.learnLv}-${idx}`}>
-                        {skill.name}
-                        {skill.learnLv != null ? ` (${skill.learnLv})` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <h3>最大アップ</h3>
-                <ul>
-                  <li>HP {selectedDetail.maxUp?.hp ?? 0}</li>
-                  <li>MP {selectedDetail.maxUp?.mp ?? 0}</li>
-                  <li>攻 {selectedDetail.maxUp?.atk ?? 0}</li>
-                  <li>魔 {selectedDetail.maxUp?.mag ?? 0}</li>
-                  <li>運 {selectedDetail.maxUp?.luck ?? 0}</li>
-                </ul>
-              </>
-            )}
-          </div>
-
           <div className="required-box">
             <h2>
-              必要な職業{' '}
-              <span style={{ fontSize: '14px', color: '#64748b' }}>
-                ({graphData.requiredJobs.filter((job) => !job.isMastered).length}
-                /
-                {graphData.requiredJobs.length} 未達成)
-              </span>
+              必要な職業 (
+              {graphData.requiredJobs.filter(
+                (j) => !j.isMastered
+              ).length}
+              /
+              {graphData.requiredJobs.length})
             </h2>
 
             <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
@@ -658,43 +617,39 @@ export default function App() {
                   key={item.name}
                   style={{
                     display: 'flex',
-                    alignItems: 'flex-start',
                     gap: 8,
                     marginBottom: 10,
-                    opacity: item.isMastered ? 0.55 : 1,
+                    opacity: item.isMastered ? 0.5 : 1,
                   }}
                 >
                   <input
                     type="checkbox"
                     checked={item.isMastered}
-                    onChange={() => handleToggleMastered(item.name)}
-                    style={{ marginTop: 4 }}
+                    onChange={() =>
+                      handleToggleMastered(item.name)
+                    }
                   />
 
                   <div>
                     <div
                       style={{
                         fontWeight: item.isMastered ? 400 : 700,
-                        textDecoration: item.isMastered ? 'line-through' : 'none',
+                        textDecoration: item.isMastered
+                          ? 'line-through'
+                          : 'none',
                       }}
                     >
                       {item.name}
                     </div>
 
-                    <div style={{ fontSize: '13px', color: '#64748b' }}>
-                      {item.job?.itemJob ? (
-                        <>必要アイテム: {item.job.changeItem}</>
-                      ) : item.adjustedNeedLv != null ? (
-                        <>
-                          必要LV {item.adjustedNeedLv}
-                          {item.adjustedNeedLv !== item.job?.needLv &&
-                            item.job?.needLv != null && (
-                              <span> (元 {item.job.needLv})</span>
-                            )}
-                        </>
-                      ) : (
-                        <>必要LV なし</>
-                      )}
+                    <div
+                      style={{
+                        fontSize: '13px',
+                        color: '#64748b',
+                      }}
+                    >
+                      {item.adjustedNeedLv != null &&
+                        `必要LV ${item.adjustedNeedLv}`}
                     </div>
                   </div>
                 </li>
