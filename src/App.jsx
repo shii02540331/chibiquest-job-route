@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useEffect } from 'react'
 import {
   ReactFlow,
   Background,
@@ -27,10 +27,11 @@ function isUnknownJobName(name) {
 }
 
 function getSafeRequires(job) {
-  return (job.requires || []).filter((name) => !isUnknownJobName(name))
+  return (job?.requires || []).filter((name) => !isUnknownJobName(name))
 }
 
 function getTierLabel(job) {
+  if (!job) return ''
   if (job.itemJob) return 'アイテム職'
   return `${job.tier}次職`
 }
@@ -82,6 +83,7 @@ function buildUniqueGraph(target, jobsData) {
 
   function dfs(jobName) {
     if (isUnknownJobName(jobName)) return
+    if (!jobsData[jobName]) return
     if (nodeNames.has(jobName)) return
 
     nodeNames.add(jobName)
@@ -90,6 +92,9 @@ function buildUniqueGraph(target, jobsData) {
     const reqs = getSafeRequires(job)
 
     reqs.forEach((requiredJob) => {
+      if (isUnknownJobName(requiredJob)) return
+      if (!jobsData[requiredJob]) return
+
       const edgeKey = `${jobName}=>${requiredJob}`
 
       if (!edgeSet.has(edgeKey)) {
@@ -118,12 +123,14 @@ function makeLayout(nodeNames, jobsData, direction = 'horizontal') {
 
   nodeNames.forEach((jobName) => {
     const job = jobsData[jobName]
+    if (!job) return
+
     const key = job.itemJob ? 'item' : String(job.tier)
     if (!groups[key]) groups[key] = []
     groups[key].push(jobName)
   })
 
-  // 図の配置は今まで通り：アイテム職を先頭側
+  // 図の配置は今まで通り：アイテム職を先頭寄り
   const orderedKeys = Object.keys(groups).sort((a, b) => {
     if (a === 'item') return -1
     if (b === 'item') return 1
@@ -140,6 +147,7 @@ function makeLayout(nodeNames, jobsData, direction = 'horizontal') {
 
     arr.forEach((jobName, index) => {
       const job = jobsData[jobName]
+      if (!job) return
 
       const position =
         direction === 'horizontal'
@@ -174,7 +182,9 @@ function collectRequired(target, jobsData) {
 
   function dfs(jobName) {
     if (isUnknownJobName(jobName)) return
+    if (!jobsData[jobName]) return
     if (result.has(jobName)) return
+
     result.add(jobName)
 
     const job = jobsData[jobName]
@@ -185,7 +195,7 @@ function collectRequired(target, jobsData) {
   return [...result]
 }
 
-// クリックした職に必要な職業（下位・前提側）を強調
+// クリックした職に必要な前提職を強調
 function collectHighlightSet(selectedJob, jobsData) {
   if (!selectedJob || !jobsData[selectedJob]) {
     return { nodeSet: new Set(), edgeSet: new Set() }
@@ -196,6 +206,7 @@ function collectHighlightSet(selectedJob, jobsData) {
 
   function dfs(jobName) {
     if (isUnknownJobName(jobName)) return
+    if (!jobsData[jobName]) return
     if (nodeSet.has(jobName)) return
 
     nodeSet.add(jobName)
@@ -204,6 +215,7 @@ function collectHighlightSet(selectedJob, jobsData) {
     const reqs = getSafeRequires(job)
 
     reqs.forEach((requiredJob) => {
+      if (!jobsData[requiredJob]) return
       edgeSet.add(`${jobName}=>${requiredJob}`)
       dfs(requiredJob)
     })
@@ -215,6 +227,17 @@ function collectHighlightSet(selectedJob, jobsData) {
 }
 
 export default function App() {
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 1000)
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth <= 1000)
+    }
+
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
   const visibleJobs = useMemo(() => {
     return Object.entries(jobs)
       .filter(([, data]) => !data.hiddenInSearch)
@@ -223,7 +246,7 @@ export default function App() {
         const aKey = getFilterKey(a)
         const bKey = getFilterKey(b)
 
-        // 選択一覧ではアイテム職を末尾
+        // 一覧ではアイテム職を末尾
         if (aKey === 'item' && bKey !== 'item') return 1
         if (aKey !== 'item' && bKey === 'item') return -1
         if (aKey !== bKey) return Number(aKey) - Number(bKey)
@@ -308,15 +331,9 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-
         <div className="title-row">
-          <h1 className="site-title">
-            チビクエスト職業ルート検索
-          </h1>
-
-          <div className="header-ad">
-            広告スペース
-          </div>
+          <h1 className="site-title">チビクエスト職業ルート検索</h1>
+          <div className="header-ad">広告スペース</div>
         </div>
 
         <div className="toolbar">
