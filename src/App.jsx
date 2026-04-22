@@ -310,7 +310,9 @@ export default function App() {
       <header className="topbar">
 
         <div className="title-row">
-          <h1>チビクエスト職業ルート検索</h1>
+          <h1 className="site-title">
+            チビクエスト職業ルート検索
+          </h1>
 
           <div className="header-ad">
             広告スペース
@@ -413,7 +415,7 @@ export default function App() {
               nodes={graphData.nodes}
               edges={graphData.edges}
               nodeTypes={nodeTypes}
-              fitView
+              fitView={!isMobile}
               minZoom={0.2}
               maxZoom={2}
               nodesDraggable={false}
@@ -421,11 +423,12 @@ export default function App() {
               zoomOnScroll
               zoomOnPinch
               zoomOnDoubleClick={false}
+              onlyRenderVisibleElements
               onNodeClick={(_, node) => {
                 setSelectedJob(node.id)
               }}
             >
-              <Background />
+              {!isMobile && <Background />}
               <Controls />
             </ReactFlow>
           </div>
