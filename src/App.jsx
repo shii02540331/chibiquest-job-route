@@ -22,6 +22,8 @@ const tierColors = {
   9: '#ddd6fe',
 }
 
+const MASTERED_STORAGE_KEY = 'chibiquest-mastered-jobs'
+
 function isUnknownJobName(name) {
   return !name || name === '不明' || name === '[[]]' || !jobs[name]
 }
@@ -46,7 +48,6 @@ function getFilterLabel(key) {
   return `${key}次職`
 }
 
-/* 7次以上を表示している時は1次職を省略 */
 function shouldHideLowTier(jobName, targetName, jobsData) {
   const job = jobsData[jobName]
   const targetJob = jobsData[targetName]
@@ -58,6 +59,23 @@ function shouldHideLowTier(jobName, targetName, jobsData) {
   }
 
   return false
+}
+
+function getAdjustedNeedLv(baseLv, reincarnationCount) {
+  if (baseLv == null || Number.isNaN(baseLv)) return null
+  return Math.max(baseLv - reincarnationCount * 10, 1)
+}
+
+function loadMasteredJobs() {
+  try {
+    const raw = localStorage.getItem(MASTERED_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((name) => typeof name === 'string')
+  } catch {
+    return []
+  }
 }
 
 function JobNode({ data }) {
@@ -115,7 +133,6 @@ function buildUniqueGraph(target, jobsData) {
 
       if (!edgeSet.has(edgeKey)) {
         edgeSet.add(edgeKey)
-
         edges.push({
           id: edgeKey,
           source: jobName,
@@ -143,7 +160,6 @@ function makeLayout(nodeNames, jobsData, direction = 'horizontal') {
     if (!job) return
 
     const key = job.itemJob ? 'item' : String(job.tier)
-
     if (!groups[key]) groups[key] = []
     groups[key].push(jobName)
   })
@@ -252,6 +268,8 @@ function collectHighlightSet(selectedJob, targetJob, jobsData) {
 
 export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1000)
+  const [masteredJobs, setMasteredJobs] = useState(() => loadMasteredJobs())
+  const [reincarnationCount, setReincarnationCount] = useState(0)
 
   useEffect(() => {
     const handleResize = () => {
@@ -261,6 +279,12 @@ export default function App() {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  useEffect(() => {
+    localStorage.setItem(MASTERED_STORAGE_KEY, JSON.stringify(masteredJobs))
+  }, [masteredJobs])
+
+  const masteredSet = useMemo(() => new Set(masteredJobs), [masteredJobs])
 
   const visibleJobs = useMemo(() => {
     return Object.entries(jobs)
@@ -316,12 +340,7 @@ export default function App() {
     const uniqueGraph = buildUniqueGraph(target, jobs)
     const baseNodes = makeLayout(uniqueGraph.nodeNames, jobs, direction)
 
-    const { nodeSet, edgeSet } = collectHighlightSet(
-      selectedJob,
-      target,
-      jobs
-    )
-
+    const { nodeSet, edgeSet } = collectHighlightSet(selectedJob, target, jobs)
     const hasSelection = !!selectedJob
 
     const nodes = baseNodes.map((node) => ({
@@ -343,12 +362,37 @@ export default function App() {
         : { stroke: '#64748b', strokeWidth: 2, opacity: 0.9 },
     }))
 
+    const requiredJobs = collectRequired(target, jobs)
+      .map((jobName) => {
+        const job = jobs[jobName]
+        return {
+          name: jobName,
+          job,
+          isMastered: masteredSet.has(jobName),
+          adjustedNeedLv: getAdjustedNeedLv(job?.needLv, reincarnationCount),
+        }
+      })
+      .sort((a, b) => {
+        if (a.isMastered !== b.isMastered) {
+          return a.isMastered ? 1 : -1
+        }
+
+        const aLv = a.adjustedNeedLv ?? -1
+        const bLv = b.adjustedNeedLv ?? -1
+
+        if (aLv !== bLv) {
+          return bLv - aLv
+        }
+
+        return a.name.localeCompare(b.name, 'ja')
+      })
+
     return {
       nodes,
       edges,
-      requiredJobs: collectRequired(target, jobs),
+      requiredJobs,
     }
-  }, [target, direction, selectedJob])
+  }, [target, direction, selectedJob, masteredSet, reincarnationCount])
 
   const handleShow = useCallback(() => {
     if (!input || !jobs[input]) return
@@ -358,7 +402,19 @@ export default function App() {
     setFlowKey((prev) => prev + 1)
   }, [input])
 
+  const handleToggleMastered = useCallback((jobName) => {
+    setMasteredJobs((prev) => {
+      if (prev.includes(jobName)) {
+        return prev.filter((name) => name !== jobName)
+      }
+      return [...prev, jobName]
+    })
+  }, [])
+
   const selectedDetail = selectedJob ? jobs[selectedJob] : null
+  const selectedAdjustedNeedLv = selectedDetail
+    ? getAdjustedNeedLv(selectedDetail.needLv, reincarnationCount)
+    : null
 
   return (
     <div className="app">
@@ -413,6 +469,29 @@ export default function App() {
             </select>
           </div>
 
+          <div className="selector-group">
+            <label className="toolbar-label">転生数</label>
+            <input
+              type="number"
+              min="0"
+              value={reincarnationCount}
+              onChange={(e) => {
+                const value = Number(e.target.value)
+                setReincarnationCount(
+                  Number.isNaN(value) || value < 0 ? 0 : Math.floor(value)
+                )
+              }}
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                fontSize: '14px',
+                border: '1px solid #cbd5e1',
+                borderRadius: '8px',
+                background: '#ffffff',
+              }}
+            />
+          </div>
+
           <div className="button-group">
             <button onClick={handleShow}>表示</button>
 
@@ -434,9 +513,7 @@ export default function App() {
               縦向き
             </button>
 
-            <button
-              onClick={() => setFlowKey((prev) => prev + 1)}
-            >
+            <button onClick={() => setFlowKey((prev) => prev + 1)}>
               リセット
             </button>
           </div>
@@ -504,7 +581,14 @@ export default function App() {
                 {selectedDetail.needLv != null && (
                   <>
                     <h3>必要LV</h3>
-                    <p>{selectedDetail.needLv}</p>
+                    <p>
+                      {selectedAdjustedNeedLv}
+                      {selectedAdjustedNeedLv !== selectedDetail.needLv && (
+                        <span style={{ color: '#64748b', marginLeft: 8 }}>
+                          (元 {selectedDetail.needLv})
+                        </span>
+                      )}
+                    </p>
                   </>
                 )}
 
@@ -528,16 +612,92 @@ export default function App() {
                     ))}
                   </ul>
                 )}
+
+                <h3>マスターLV</h3>
+                <p>{selectedDetail.masterLv ?? '未設定'}</p>
+
+                <h3>覚える技（覚える職業LV）</h3>
+                {selectedDetail.skills.length === 0 ? (
+                  <p>なし</p>
+                ) : (
+                  <ul>
+                    {selectedDetail.skills.map((skill, idx) => (
+                      <li key={`${skill.name}-${skill.learnLv}-${idx}`}>
+                        {skill.name}
+                        {skill.learnLv != null ? ` (${skill.learnLv})` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <h3>最大アップ</h3>
+                <ul>
+                  <li>HP {selectedDetail.maxUp?.hp ?? 0}</li>
+                  <li>MP {selectedDetail.maxUp?.mp ?? 0}</li>
+                  <li>攻 {selectedDetail.maxUp?.atk ?? 0}</li>
+                  <li>魔 {selectedDetail.maxUp?.mag ?? 0}</li>
+                  <li>運 {selectedDetail.maxUp?.luck ?? 0}</li>
+                </ul>
               </>
             )}
           </div>
 
           <div className="required-box">
-            <h2>必要な職業</h2>
+            <h2>
+              必要な職業{' '}
+              <span style={{ fontSize: '14px', color: '#64748b' }}>
+                ({graphData.requiredJobs.filter((job) => !job.isMastered).length}
+                /
+                {graphData.requiredJobs.length} 未達成)
+              </span>
+            </h2>
 
-            <ul>
-              {graphData.requiredJobs.map((jobName) => (
-                <li key={jobName}>{jobName}</li>
+            <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
+              {graphData.requiredJobs.map((item) => (
+                <li
+                  key={item.name}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    marginBottom: 10,
+                    opacity: item.isMastered ? 0.55 : 1,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={item.isMastered}
+                    onChange={() => handleToggleMastered(item.name)}
+                    style={{ marginTop: 4 }}
+                  />
+
+                  <div>
+                    <div
+                      style={{
+                        fontWeight: item.isMastered ? 400 : 700,
+                        textDecoration: item.isMastered ? 'line-through' : 'none',
+                      }}
+                    >
+                      {item.name}
+                    </div>
+
+                    <div style={{ fontSize: '13px', color: '#64748b' }}>
+                      {item.job?.itemJob ? (
+                        <>必要アイテム: {item.job.changeItem}</>
+                      ) : item.adjustedNeedLv != null ? (
+                        <>
+                          必要LV {item.adjustedNeedLv}
+                          {item.adjustedNeedLv !== item.job?.needLv &&
+                            item.job?.needLv != null && (
+                              <span> (元 {item.job.needLv})</span>
+                            )}
+                        </>
+                      ) : (
+                        <>必要LV なし</>
+                      )}
+                    </div>
+                  </div>
+                </li>
               ))}
             </ul>
           </div>
