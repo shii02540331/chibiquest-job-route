@@ -46,12 +46,26 @@ function getFilterLabel(key) {
   return `${key}次職`
 }
 
+/* 7次以上を表示している時は1次職を省略 */
+function shouldHideLowTier(jobName, targetName, jobsData) {
+  const job = jobsData[jobName]
+  const targetJob = jobsData[targetName]
+
+  if (!job || !targetJob) return false
+
+  if (targetJob.tier >= 7 && !job.itemJob && job.tier === 1) {
+    return true
+  }
+
+  return false
+}
+
 function JobNode({ data }) {
   const opacity = data.dimmed ? 0.28 : 1
   const borderColor = data.highlighted ? '#0f172a' : '#334155'
   const boxShadow = data.highlighted
     ? '0 0 0 3px rgba(15,23,42,0.15), 0 4px 12px rgba(15,23,42,0.18)'
-    : '0 2px 6px rgba(15, 23, 42, 0.08)'
+    : '0 2px 6px rgba(15,23,42,0.08)'
 
   return (
     <div
@@ -85,6 +99,7 @@ function buildUniqueGraph(target, jobsData) {
     if (isUnknownJobName(jobName)) return
     if (!jobsData[jobName]) return
     if (nodeNames.has(jobName)) return
+    if (shouldHideLowTier(jobName, target, jobsData)) return
 
     nodeNames.add(jobName)
 
@@ -94,11 +109,13 @@ function buildUniqueGraph(target, jobsData) {
     reqs.forEach((requiredJob) => {
       if (isUnknownJobName(requiredJob)) return
       if (!jobsData[requiredJob]) return
+      if (shouldHideLowTier(requiredJob, target, jobsData)) return
 
       const edgeKey = `${jobName}=>${requiredJob}`
 
       if (!edgeSet.has(edgeKey)) {
         edgeSet.add(edgeKey)
+
         edges.push({
           id: edgeKey,
           source: jobName,
@@ -126,11 +143,11 @@ function makeLayout(nodeNames, jobsData, direction = 'horizontal') {
     if (!job) return
 
     const key = job.itemJob ? 'item' : String(job.tier)
+
     if (!groups[key]) groups[key] = []
     groups[key].push(jobName)
   })
 
-  // 図の配置は今まで通り：アイテム職を先頭寄り
   const orderedKeys = Object.keys(groups).sort((a, b) => {
     if (a === 'item') return -1
     if (b === 'item') return 1
@@ -183,6 +200,7 @@ function collectRequired(target, jobsData) {
   function dfs(jobName) {
     if (isUnknownJobName(jobName)) return
     if (!jobsData[jobName]) return
+    if (shouldHideLowTier(jobName, target, jobsData)) return
     if (result.has(jobName)) return
 
     result.add(jobName)
@@ -192,13 +210,16 @@ function collectRequired(target, jobsData) {
   }
 
   dfs(target)
+
   return [...result]
 }
 
-// クリックした職に必要な前提職を強調
-function collectHighlightSet(selectedJob, jobsData) {
+function collectHighlightSet(selectedJob, targetJob, jobsData) {
   if (!selectedJob || !jobsData[selectedJob]) {
-    return { nodeSet: new Set(), edgeSet: new Set() }
+    return {
+      nodeSet: new Set(),
+      edgeSet: new Set(),
+    }
   }
 
   const nodeSet = new Set()
@@ -207,6 +228,7 @@ function collectHighlightSet(selectedJob, jobsData) {
   function dfs(jobName) {
     if (isUnknownJobName(jobName)) return
     if (!jobsData[jobName]) return
+    if (shouldHideLowTier(jobName, targetJob, jobsData)) return
     if (nodeSet.has(jobName)) return
 
     nodeSet.add(jobName)
@@ -216,6 +238,8 @@ function collectHighlightSet(selectedJob, jobsData) {
 
     reqs.forEach((requiredJob) => {
       if (!jobsData[requiredJob]) return
+      if (shouldHideLowTier(requiredJob, targetJob, jobsData)) return
+
       edgeSet.add(`${jobName}=>${requiredJob}`)
       dfs(requiredJob)
     })
@@ -246,16 +270,17 @@ export default function App() {
         const aKey = getFilterKey(a)
         const bKey = getFilterKey(b)
 
-        // 一覧ではアイテム職を末尾
         if (aKey === 'item' && bKey !== 'item') return 1
         if (aKey !== 'item' && bKey === 'item') return -1
         if (aKey !== bKey) return Number(aKey) - Number(bKey)
+
         return a.name.localeCompare(b.name, 'ja')
       })
   }, [])
 
   const filterOptions = useMemo(() => {
     const keys = [...new Set(visibleJobs.map((job) => getFilterKey(job)))]
+
     return keys.sort((a, b) => {
       if (a === 'item') return 1
       if (b === 'item') return -1
@@ -290,7 +315,13 @@ export default function App() {
 
     const uniqueGraph = buildUniqueGraph(target, jobs)
     const baseNodes = makeLayout(uniqueGraph.nodeNames, jobs, direction)
-    const { nodeSet, edgeSet } = collectHighlightSet(selectedJob, jobs)
+
+    const { nodeSet, edgeSet } = collectHighlightSet(
+      selectedJob,
+      target,
+      jobs
+    )
+
     const hasSelection = !!selectedJob
 
     const nodes = baseNodes.map((node) => ({
@@ -321,6 +352,7 @@ export default function App() {
 
   const handleShow = useCallback(() => {
     if (!input || !jobs[input]) return
+
     setTarget(input)
     setSelectedJob(null)
     setFlowKey((prev) => prev + 1)
@@ -339,6 +371,7 @@ export default function App() {
         <div className="toolbar">
           <div className="selector-group">
             <label className="toolbar-label">分類</label>
+
             <select
               value={selectedFilter}
               onChange={(e) => {
@@ -349,12 +382,14 @@ export default function App() {
                   if (value === 'all') return true
                   return getFilterKey(job) === value
                 })
+
                 if (nextJobs.length > 0) {
                   setInput(nextJobs[0].name)
                 }
               }}
             >
               <option value="all">すべて</option>
+
               {filterOptions.map((key) => (
                 <option key={key} value={key}>
                   {getFilterLabel(key)}
@@ -365,7 +400,11 @@ export default function App() {
 
           <div className="selector-group selector-main">
             <label className="toolbar-label">職業</label>
-            <select value={input} onChange={(e) => setInput(e.target.value)}>
+
+            <select
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+            >
               {filteredJobs.map((job) => (
                 <option key={job.name} value={job.name}>
                   {job.name}
@@ -376,6 +415,7 @@ export default function App() {
 
           <div className="button-group">
             <button onClick={handleShow}>表示</button>
+
             <button
               onClick={() => {
                 setDirection('horizontal')
@@ -384,6 +424,7 @@ export default function App() {
             >
               横向き
             </button>
+
             <button
               onClick={() => {
                 setDirection('vertical')
@@ -392,7 +433,10 @@ export default function App() {
             >
               縦向き
             </button>
-            <button onClick={() => setFlowKey((prev) => prev + 1)}>
+
+            <button
+              onClick={() => setFlowKey((prev) => prev + 1)}
+            >
               リセット
             </button>
           </div>
@@ -402,27 +446,21 @@ export default function App() {
       <main className="main">
         <section className="graph-panel">
           <div className="panel-header">
-            <div className="panel-title">{target} に必要な職業ツリー</div>
+            <div className="panel-title">
+              {target} に必要な職業ツリー
+            </div>
 
             <div className="legend">
               <span className="legend-item">
-                <span className="legend-color tier0" />
-                0次職
+                <span className="legend-color tier1" />1次職
               </span>
               <span className="legend-item">
-                <span className="legend-color tier1" />
-                1次職
+                <span className="legend-color tier2" />2次職
               </span>
               <span className="legend-item">
-                <span className="legend-color tier2" />
-                2次職
-              </span>
-              <span className="legend-item">
-                <span className="legend-color tier3" />
-                3次職
+                <span className="legend-color tier3" />3次職
               </span>
               <span className="legend-item">📦 アイテム職</span>
-              <span className="legend-item">クリックで必要職を強調</span>
             </div>
           </div>
 
@@ -473,11 +511,14 @@ export default function App() {
                 {selectedDetail.itemJob && (
                   <>
                     <h3>必要アイテム</h3>
-                    <p className="item-job-text">{selectedDetail.changeItem}</p>
+                    <p className="item-job-text">
+                      {selectedDetail.changeItem}
+                    </p>
                   </>
                 )}
 
                 <h3>前提職業</h3>
+
                 {getSafeRequires(selectedDetail).length === 0 ? (
                   <p>なし</p>
                 ) : (
@@ -487,38 +528,13 @@ export default function App() {
                     ))}
                   </ul>
                 )}
-
-                <h3>マスターLV</h3>
-                <p>{selectedDetail.masterLv ?? '未設定'}</p>
-
-                <h3>覚える技（覚える職業LV）</h3>
-                {selectedDetail.skills.length === 0 ? (
-                  <p>なし</p>
-                ) : (
-                  <ul>
-                    {selectedDetail.skills.map((skill, idx) => (
-                      <li key={`${skill.name}-${skill.learnLv}-${idx}`}>
-                        {skill.name}
-                        {skill.learnLv != null ? ` (${skill.learnLv})` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <h3>最大アップ</h3>
-                <ul>
-                  <li>HP {selectedDetail.maxUp.hp ?? 0}</li>
-                  <li>MP {selectedDetail.maxUp.mp ?? 0}</li>
-                  <li>攻 {selectedDetail.maxUp.atk ?? 0}</li>
-                  <li>魔 {selectedDetail.maxUp.mag ?? 0}</li>
-                  <li>運 {selectedDetail.maxUp.luck ?? 0}</li>
-                </ul>
               </>
             )}
           </div>
 
           <div className="required-box">
             <h2>必要な職業</h2>
+
             <ul>
               {graphData.requiredJobs.map((jobName) => (
                 <li key={jobName}>{jobName}</li>
